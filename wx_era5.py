@@ -1,5 +1,16 @@
 #!/usr/bin/env python
 
+import ssl
+
+## So HTTPS transfers work properly
+ssl._create_default_https_context = ssl._create_unverified_context
+
+import requests
+from urllib3.exceptions import InsecureRequestWarning
+
+# Suppress only the single warning from urllib3 needed.
+requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
+
 import cdsapi
 import netCDF4
 import datetime
@@ -14,9 +25,18 @@ LONGITUDE_MIN = -141
 LONGITUDE_MAX = -52
 AREA = [LATITUDE_MAX, LONGITUDE_MIN, LATITUDE_MIN, LONGITUDE_MAX]
 # NOTE: need to get a client key as per https://cds.climate.copernicus.eu/api-how-to
-DIR = 'era5'
 
-c = cdsapi.Client()
+def ensure_dir(dir):
+    """!
+    Check if directory exists and make it if not
+    @param dir Directory to ensure existence of
+    @return None
+    """
+    if not os.path.exists(dir):
+        os.makedirs(dir)
+    return dir
+
+DIR = ensure_dir('era5')
 
 def calc_rh(Td, T):
     """!
@@ -58,6 +78,8 @@ def kelvin_to_celcius(t):
     @return Temperature (Kelvin)
     """
     return t - 273.15
+
+c = cdsapi.Client(verify=False)
 
 def get_year(year = 2008):
     csv_file = os.path.join(DIR, '{:04d}.csv'.format(year))
