@@ -77,7 +77,7 @@ def get_year(year = 2008):
     file_wind_u = os.path.join(DIR, '{year:04d}_wind_u.nc'.format(year=year))
     file_wind_v = os.path.join(DIR, '{year:04d}_wind_v.nc'.format(year=year))
     file_prec = os.path.join(DIR, '{year:04d}_prec.nc'.format(year=year))
-    if not os.path.exits(file_temp):
+    if not os.path.exists(file_temp):
         c.retrieve(
             'reanalysis-era5-land',
             {
