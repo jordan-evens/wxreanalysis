@@ -79,9 +79,14 @@ def kelvin_to_celcius(t):
     """
     return t - 273.15
 
+calc_rh = np.vectorize(calc_rh)
+calc_ws = np.vectorize(calc_ws)
+calc_wd = np.vectorize(calc_wd)
+kelvin_to_celcius = np.vectorize(kelvin_to_celcius)
+
 c = cdsapi.Client(verify=False)
 
-def get_year(year = 2008):
+def get_year(year = 2008, convert=True):
     csv_file = os.path.join(DIR, '{:04d}.csv'.format(year))
 
     def to_datetime(hours):
@@ -169,7 +174,8 @@ def get_year(year = 2008):
                 'format': 'netcdf',
             },
             file_prec)
-
+    if not convert:
+        return
     nc_temp = netCDF4.Dataset(file_temp)
     nc_dew = netCDF4.Dataset(file_dew)
     nc_wind_u = netCDF4.Dataset(file_wind_u)
@@ -204,9 +210,10 @@ def get_year(year = 2008):
             def get_var(nc, name):
                 v = nc.variables[name]
                 d = v[i_time, i_lat].data
-                def fix(x):
-                    return(np.NaN if x == v.missing_value else x)
-                d = np.vectorize(fix)(d)
+                # def fix(x):
+                #     return(np.NaN if x == v.missing_value else x)
+                # d = np.vectorize(fix)(d)
+                d[d == v.missing_value] = np.NaN
                 return(d)
             temp = get_var(nc_temp, 't2m')
             dew = get_var(nc_dew, 'd2m')
@@ -214,11 +221,11 @@ def get_year(year = 2008):
             u = get_var(nc_wind_u, 'u10')
             v = get_var(nc_wind_v, 'v10')
             df = pd.DataFrame({'longitude': longitudes,
-                               'temp': np.vectorize(kelvin_to_celcius)(temp),
-                               'rh': np.vectorize(calc_rh)(np.vectorize(kelvin_to_celcius)(dew),
-                                                           np.vectorize(kelvin_to_celcius)(temp)),
-                               'ws': np.vectorize(calc_ws)(u, v),
-                               'wd': np.vectorize(calc_wd)(u, v),
+                               'temp': kelvin_to_celcius(temp),
+                               'rh': calc_rh(kelvin_to_celcius(dew),
+                                                           kelvin_to_celcius(temp)),
+                               'ws': calc_ws(u, v),
+                               'wd': calc_wd(u, v),
                                # convert m to mm
                                'prec': prec * 1000})
             df['latitude'] = latitude
@@ -232,10 +239,11 @@ def get_year(year = 2008):
         #result.append(df)
         df = df[['time', 'latitude', 'longitude', 'temp', 'rh', 'ws', 'wd', 'prec']]
         df['temp'] = df['temp'].apply(lambda x: '{:0.1f}'.format(x))
+        df['rh'] = df['rh'].apply(lambda x: '{:0.0f}'.format(x))
         df['ws'] = df['ws'].apply(lambda x: '{:0.1f}'.format(x))
         df['wd'] = df['wd'].apply(lambda x: '{:0.0f}'.format(x))
         df['prec'] = df['prec'].apply(lambda x: '{:0.1f}'.format(x))
         df.to_csv(csv_file, header=False, index=False, mode='a')
 
 for y in range(1980, 2021):
-    get_year(y)
+    get_year(y, convert=False)
