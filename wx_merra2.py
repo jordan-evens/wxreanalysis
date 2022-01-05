@@ -1,5 +1,6 @@
 
 import ssl
+from tqdm import tqdm
 
 ## So HTTPS transfers work properly
 ssl._create_default_https_context = ssl._create_unverified_context
@@ -8,12 +9,15 @@ import requests
 from urllib3.exceptions import InsecureRequestWarning
 import os
 
-DIR = './merra2'
+# DIR = './merra2'
+DIR = r'F:\wxreanalysis\merra2'
 if not os.path.exists(DIR):
     os.makedirs(DIR)
 
 # Suppress only the single warning from urllib3 needed.
 requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
+import urllib3
+urllib3.disable_warnings(category=InsecureRequestWarning)
 
 
 # # LATITUDE_MIN = 41
@@ -124,8 +128,8 @@ requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 username = "jordan_evens_nrcan"
 password = "eQnhX29-kw!Y/yA"
 
-url4 = "https://goldsmr4.gesdisc.eosdis.nasa.gov/data/MERRA2/M2I1NXASM.5.12.4/1980/01/MERRA2_100.inst1_2d_asm_Nx.19800101.nc4"
-url_flux = "https://goldsmr4.gesdisc.eosdis.nasa.gov/data/MERRA2/M2T1NXFLX.5.12.4/1980/01/MERRA2_100.tavg1_2d_flx_Nx.19800101.nc4"
+url_main = "https://goldsmr4.gesdisc.eosdis.nasa.gov/data/MERRA2/M2I1NXASM.5.12.4/{year:04d}/{month:02d}/MERRA2_{version:03d}.inst1_2d_asm_Nx.{year:04d}{month:02d}{day:02d}.nc4"
+url_flux = "https://goldsmr4.gesdisc.eosdis.nasa.gov/data/MERRA2/M2T1NXFLX.5.12.4/{year:04d}/{month:02d}/MERRA2_{version:03d}.tavg1_2d_flx_Nx.{year:04d}{month:02d}{day:02d}.nc4"
 import os
 import requests
 
@@ -150,19 +154,26 @@ class SessionWithHeaderRedirection(requests.Session):
                 del headers['Authorization']
         return
 
-def download(filename, url):
+def download(url, filename=None):
+    if filename is None:
+        filename = os.path.join(DIR, os.path.basename(url))
     if not os.path.exists(filename):
         session = SessionWithHeaderRedirection(username, password)
         try:
+            print(filename)
             # submit the request using the session
-            response = session.get(url, stream=True)
-            print(response.status_code)
+            response = session.get(url, stream=True, verify=False)
+            # print(response.status_code)
             # raise an exception in case of http errors
             response.raise_for_status()
+            size = int(response.headers.get('content-length', 0))
             # save the file
+            progress_bar = tqdm(total=size, unit='iB', unit_scale=True)
             with open(filename, 'wb') as fd:
                 for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    progress_bar.update(len(chunk))
                     fd.write(chunk)
+            progress_bar.close()
         except requests.exceptions.HTTPError as e:
             # handle any errors here
             print(e)
@@ -172,81 +183,94 @@ def list_vars(nc):
     return(list(map(lambda x: x + ": " + nc[x].long_name, nc.variables)))
 
 import netCDF4
-# ['lon: longitude',
-#  'lat: latitude',
-#  'time: time',
-#  'DISPH: zero_plane_displacement_height',
-#  'PS: surface_pressure',
-#  'QV10M: 10-meter_specific_humidity',
-#  'QV2M: 2-meter_specific_humidity',
-#  'SLP: sea_level_pressure',
-#  'T10M: 10-meter_air_temperature',
-#  'T2M: 2-meter_air_temperature',
-#  'TO3: total_column_ozone',
-#  'TOX: total_column_odd_oxygen',
-#  'TQI: total_precipitable_ice_water',
-#  'TQL: total_precipitable_liquid_water',
-#  'TQV: total_precipitable_water_vapor',
-#  'TROPPB: tropopause_pressure_based_on_blended_estimate',
-#  'TROPPT: tropopause_pressure_based_on_thermal_estimate',
-#  'TROPPV: tropopause_pressure_based_on_EPV_estimate',
-#  'TROPQ: tropopause_specific_humidity_using_blended_TROPP_estimate',
-#  'TROPT: tropopause_temperature_using_blended_TROPP_estimate',
-#  'TS: surface_skin_temperature',
-#  'U10M: 10-meter_eastward_wind',
-#  'U2M: 2-meter_eastward_wind',
-#  'U50M: eastward_wind_at_50_meters',
-#  'V10M: 10-meter_northward_wind',
-#  'V2M: 2-meter_northward_wind',
-#  'V50M: northward_wind_at_50_meters']
-nc4 = netCDF4.Dataset(download("test4.nc", url4))
-# ['lon: longitude',
-#  'lat: latitude',
-#  'time: time',
-#  'BSTAR: surface_bouyancy_scale',
-#  'CDH: surface_exchange_coefficient_for_heat',
-#  'CDM: surface_exchange_coefficient_for_momentum',
-#  'CDQ: surface_exchange_coefficient_for_moisture',
-#  'CN: surface_neutral_drag_coefficient',
-#  'DISPH: zero_plane_displacement_height',
-#  'EFLUX: total_latent_energy_flux',
-#  'EVAP: evaporation_from_turbulence',
-#  'FRCAN: areal_fraction_of_anvil_showers',
-#  'FRCCN: areal_fraction_of_convective_showers',
-#  'FRCLS: areal_fraction_of_nonanvil_large_scale_showers',
-#  'FRSEAICE: ice_covered_fraction_of_tile',
-#  'GHTSKIN: Ground_heating_for_skin_temp',
-#  'HFLUX: sensible_heat_flux_from_turbulence',
-#  'HLML: surface_layer_height',
-#  'NIRDF: surface_downwelling_nearinfrared_diffuse_flux',
-#  'NIRDR: surface_downwelling_nearinfrared_beam_flux',
-#  'PBLH: planetary_boundary_layer_height',
-#  'PGENTOT: Total_column_production_of_precipitation',
-#  'PRECANV: anvil_precipitation',
-#  'PRECCON: convective_precipitation',
-#  'PRECLSC: nonanvil_large_scale_precipitation',
-#  'PRECSNO: snowfall',
-#  'PRECTOT: total_precipitation',
-#  'PRECTOTCORR: total_precipitation',
-#  'PREVTOT: Total_column_re-evap/subl_of_precipitation',
-#  'QLML: surface_specific_humidity',
-#  'QSH: effective_surface_specific_humidity',
-#  'QSTAR: surface_moisture_scale',
-#  'RHOA: air_density_at_surface',
-#  'RISFC: surface_bulk_richardson_number',
-#  'SPEED: surface_wind_speed',
-#  'SPEEDMAX: surface_wind_speed',
-#  'TAUGWX: surface_eastward_gravity_wave_stress',
-#  'TAUGWY: surface_northward_gravity_wave_stress',
-#  'TAUX: eastward_surface_stress',
-#  'TAUY: northward_surface_stress',
-#  'TCZPBL: transcom_planetary_boundary_layer_height',
-#  'TLML: surface_air_temperature',
-#  'TSH: effective_surface_skin_temperature',
-#  'TSTAR: surface_temperature_scale',
-#  'ULML: surface_eastward_wind',
-#  'USTAR: surface_velocity_scale',
-#  'VLML: surface_northward_wind',
-#  'Z0H: surface_roughness_for_heat',
-#  'Z0M: surface_roughness']
-nc9 = netCDF4.Dataset(download("test9.nc", url_flux))
+import datetime
+
+def get_date(date):
+    print(date)
+    year = date.year
+    month = date.month
+    day = date.day
+    version = 100 if year < 1992 else 200 if year < 2001 else 300 if year < 2011 else 400
+    # ['lon: longitude',
+    #  'lat: latitude',
+    #  'time: time',
+    #  'DISPH: zero_plane_displacement_height',
+    #  'PS: surface_pressure',
+    #  'QV10M: 10-meter_specific_humidity',
+    #  'QV2M: 2-meter_specific_humidity',
+    #  'SLP: sea_level_pressure',
+    #  'T10M: 10-meter_air_temperature',
+    #  'T2M: 2-meter_air_temperature',
+    #  'TO3: total_column_ozone',
+    #  'TOX: total_column_odd_oxygen',
+    #  'TQI: total_precipitable_ice_water',
+    #  'TQL: total_precipitable_liquid_water',
+    #  'TQV: total_precipitable_water_vapor',
+    #  'TROPPB: tropopause_pressure_based_on_blended_estimate',
+    #  'TROPPT: tropopause_pressure_based_on_thermal_estimate',
+    #  'TROPPV: tropopause_pressure_based_on_EPV_estimate',
+    #  'TROPQ: tropopause_specific_humidity_using_blended_TROPP_estimate',
+    #  'TROPT: tropopause_temperature_using_blended_TROPP_estimate',
+    #  'TS: surface_skin_temperature',
+    #  'U10M: 10-meter_eastward_wind',
+    #  'U2M: 2-meter_eastward_wind',
+    #  'U50M: eastward_wind_at_50_meters',
+    #  'V10M: 10-meter_northward_wind',
+    #  'V2M: 2-meter_northward_wind',
+    #  'V50M: northward_wind_at_50_meters']
+    download(url_main.format(year=year, month=month, day=day, version=version))
+    # ['lon: longitude',
+    #  'lat: latitude',
+    #  'time: time',
+    #  'BSTAR: surface_bouyancy_scale',
+    #  'CDH: surface_exchange_coefficient_for_heat',
+    #  'CDM: surface_exchange_coefficient_for_momentum',
+    #  'CDQ: surface_exchange_coefficient_for_moisture',
+    #  'CN: surface_neutral_drag_coefficient',
+    #  'DISPH: zero_plane_displacement_height',
+    #  'EFLUX: total_latent_energy_flux',
+    #  'EVAP: evaporation_from_turbulence',
+    #  'FRCAN: areal_fraction_of_anvil_showers',
+    #  'FRCCN: areal_fraction_of_convective_showers',
+    #  'FRCLS: areal_fraction_of_nonanvil_large_scale_showers',
+    #  'FRSEAICE: ice_covered_fraction_of_tile',
+    #  'GHTSKIN: Ground_heating_for_skin_temp',
+    #  'HFLUX: sensible_heat_flux_from_turbulence',
+    #  'HLML: surface_layer_height',
+    #  'NIRDF: surface_downwelling_nearinfrared_diffuse_flux',
+    #  'NIRDR: surface_downwelling_nearinfrared_beam_flux',
+    #  'PBLH: planetary_boundary_layer_height',
+    #  'PGENTOT: Total_column_production_of_precipitation',
+    #  'PRECANV: anvil_precipitation',
+    #  'PRECCON: convective_precipitation',
+    #  'PRECLSC: nonanvil_large_scale_precipitation',
+    #  'PRECSNO: snowfall',
+    #  'PRECTOT: total_precipitation',
+    #  'PRECTOTCORR: total_precipitation',
+    #  'PREVTOT: Total_column_re-evap/subl_of_precipitation',
+    #  'QLML: surface_specific_humidity',
+    #  'QSH: effective_surface_specific_humidity',
+    #  'QSTAR: surface_moisture_scale',
+    #  'RHOA: air_density_at_surface',
+    #  'RISFC: surface_bulk_richardson_number',
+    #  'SPEED: surface_wind_speed',
+    #  'SPEEDMAX: surface_wind_speed',
+    #  'TAUGWX: surface_eastward_gravity_wave_stress',
+    #  'TAUGWY: surface_northward_gravity_wave_stress',
+    #  'TAUX: eastward_surface_stress',
+    #  'TAUY: northward_surface_stress',
+    #  'TCZPBL: transcom_planetary_boundary_layer_height',
+    #  'TLML: surface_air_temperature',
+    #  'TSH: effective_surface_skin_temperature',
+    #  'TSTAR: surface_temperature_scale',
+    #  'ULML: surface_eastward_wind',
+    #  'USTAR: surface_velocity_scale',
+    #  'VLML: surface_northward_wind',
+    #  'Z0H: surface_roughness_for_heat',
+    #  'Z0M: surface_roughness']
+    download(url_flux.format(year=year, month=month, day=day, version=version))
+
+d = datetime.date(1980, 1, 1)
+while (d < datetime.date.today()):
+    get_date(d)
+    d = d + datetime.timedelta(days=1)
