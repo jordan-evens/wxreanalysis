@@ -218,7 +218,12 @@ def get_date(date):
     #  'V10M: 10-meter_northward_wind',
     #  'V2M: 2-meter_northward_wind',
     #  'V50M: northward_wind_at_50_meters']
-    download(url_main.format(year=year, month=month, day=day, version=version))
+    try:
+        download(url_main.format(year=year, month=month, day=day, version=version))
+    except KeyboardInterrupt as e:
+        raise e
+    except:
+        pass
     # ['lon: longitude',
     #  'lat: latitude',
     #  'time: time',
@@ -268,7 +273,12 @@ def get_date(date):
     #  'VLML: surface_northward_wind',
     #  'Z0H: surface_roughness_for_heat',
     #  'Z0M: surface_roughness']
-    download(url_flux.format(year=year, month=month, day=day, version=version))
+    try:
+        download(url_flux.format(year=year, month=month, day=day, version=version))
+    except KeyboardInterrupt as e:
+        raise e
+    except:
+        pass
 
 d = datetime.date(1980, 1, 1)
 while (d < datetime.date.today()):
