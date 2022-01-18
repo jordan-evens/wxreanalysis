@@ -26,8 +26,8 @@ LONGITUDE_MIN = -141
 LONGITUDE_MAX = -52
 AREA = [LATITUDE_MAX, LONGITUDE_MIN, LATITUDE_MIN, LONGITUDE_MAX]
 # NOTE: need to get a client key as per https://cds.climate.copernicus.eu/api-how-to
-DATE_MIN = datetime.datetime(1980, 1, 1).astimezone(pytz.timezone("GMT"))
-DATE_MAX = datetime.datetime(2021, 12, 31, 23).astimezone(pytz.timezone("GMT"))
+DATE_MIN = datetime.datetime(1980, 1, 1, tzinfo=pytz.timezone("GMT"))
+DATE_MAX = datetime.datetime(2021, 12, 31, 23, tzinfo=pytz.timezone("GMT"))
 
 def ensure_dir(dir):
     """!
@@ -325,12 +325,14 @@ def getStations(latitude, longitude, model, N=10, offset=0, format='json'):
     for p in points.itertuples():
         result[p.Index] = {
             'location': [p.latitude, p.longitude],
-            'distance': p.distance
+            'distance': p.distancedf
         }
     return json.dumps(result)
 
 def to_datetime(hours):
-    return (datetime.datetime(1900, 1, 1) + datetime.timedelta(hours=hours)).astimezone(pytz.timezone("GMT"))
+    return (datetime.datetime(1900, 1, 1, tzinfo=pytz.timezone("GMT")) + datetime.timedelta(hours=int(hours))).astimezone(pytz.timezone("GMT"))
+
+to_datetime = np.vectorize(to_datetime)
 
 def getWeatherByPoint(i_lat, i_lon, model, zone, ensemble=None, start=datetime.datetime.now(), hours=24, format='json'):
     start = start.astimezone(pytz.timezone(zone))
@@ -356,52 +358,72 @@ def getWeatherByPoint(i_lat, i_lon, model, zone, ensemble=None, start=datetime.d
         nc_wind_v = netCDF4.Dataset(file_wind_v)
         nc_prec = netCDF4.Dataset(file_prec)
         # start_date = to_datetime(int(nc_temp.variables['time'][[0]].data[0]))
-        df = pd.DataFrame(data=None, columns=["date", "latitude", "longitude", "temp", "rh", "ws", "wd", "prec"])
-        csv_file = os.path.join(DIR, '{:04d}.csv'.format(year))
-        df.to_csv(csv_file, index=False)
+        # df = pd.DataFrame(data=None, columns=["date", "latitude", "longitude", "temp", "rh", "ws", "wd", "prec"])
+        # csv_file = os.path.join(DIR, '{:04d}.csv'.format(year))
+        # df.to_csv(csv_file, index=False)
         for k in ['time', 'latitude', 'longitude']:
             assert (all(nc_temp.variables[k][:].data == nc_dew.variables[k][:].data))
             assert (all(nc_temp.variables[k][:].data == nc_wind_u.variables[k][:].data))
             assert (all(nc_temp.variables[k][:].data == nc_wind_v.variables[k][:].data))
             assert (all(nc_temp.variables[k][:].data == nc_prec.variables[k][:].data))
-        for i_time, time in enumerate(nc_temp.variables['time']):
-            date = to_datetime(int(time.data))
-            if (date >= start and date < end):
-                def get_var(nc, name):
-                    v = nc.variables[name]
-                    d = v[i_time, i_lat].data[i_lon]
-                    # def fix(x):
-                    #     return(np.NaN if x == v.missing_value else x)
-                    # d = np.vectorize(fix)(d)
-                    if d == v.missing_value:
-                        d = np.NaN
-                    return (d)
-
-                temp = get_var(nc_temp, 't2m')
-                dew = get_var(nc_dew, 'd2m')
-                prec = get_var(nc_prec, 'tp')
-                u = get_var(nc_wind_u, 'u10')
-                v = get_var(nc_wind_v, 'v10')
-                df = pd.DataFrame({'temp': [kelvin_to_celcius(temp)],
-                                   'rh': [calc_rh(kelvin_to_celcius(dew),
-                                                 kelvin_to_celcius(temp))],
-                                   'ws': [calc_ws(u, v)],
-                                   'wd': [calc_wd(u, v)],
-                                   # convert m to mm
-                                   'prec': [prec * 1000]})
-                df['time'] = date
-                rows.append(df)
+        time = to_datetime(nc_temp['time'][:])
+        temp = nc_temp['t2m'][:, i_lat, i_lon]
+        dew = nc_dew['d2m'][:, i_lat, i_lon]
+        prec = nc_prec['tp'][:, i_lat, i_lon]
+        u = nc_wind_u['u10'][:, i_lat, i_lon]
+        v = nc_wind_v['v10'][:, i_lat, i_lon]
+        df = pd.DataFrame({'time': time,
+                           'temp': kelvin_to_celcius(temp),
+                           'rh': calc_rh(kelvin_to_celcius(dew),
+                                          kelvin_to_celcius(temp)),
+                           'ws': calc_ws(u, v),
+                           'wd': calc_wd(u, v),
+                           # convert m to mm
+                           'prec': prec * 1000})
+        # for i_time, time in enumerate(nc_temp.variables['time']):
+        #     date = to_datetime(int(time.data))
+        #     if (date >= start and date < end):
+        #         def get_var(nc, name):
+        #             v = nc.variables[name]
+        #             d = v[i_time, i_lat, i_lon]
+        #             # def fix(x):
+        #             #     return(np.NaN if x == v.missing_value else x)
+        #             # d = np.vectorize(fix)(d)
+        #             if d == v.missing_value:
+        #                 d = np.NaN
+        #             return d
+        #
+        #         temp = get_var(nc_temp, 't2m')
+        #         dew = get_var(nc_dew, 'd2m')
+        #         prec = get_var(nc_prec, 'tp')
+        #         u = get_var(nc_wind_u, 'u10')
+        #         v = get_var(nc_wind_v, 'v10')
+        #         df = pd.DataFrame({'temp': [kelvin_to_celcius(temp)],
+        #                            'rh': [calc_rh(kelvin_to_celcius(dew),
+        #                                           kelvin_to_celcius(temp))],
+        #                            'ws': [calc_ws(u, v)],
+        #                            'wd': [calc_wd(u, v)],
+        #                            # convert m to mm
+        #                            'prec': [prec * 1000]})
+        #         df['time'] = date
+        #         rows.append(df)
+        rows.append(df)
     df = pd.concat(rows)
+    df = df[df.time >= start]
+    df = df[df.time < end]
     df = df[['time', 'temp', 'rh', 'ws', 'wd', 'prec']]
+    # df['prec_sum'] = df.groupby(pd.to_datetime(df.time.to_numpy()).to_period('d')).prec.cumsum()
     # HACK: can't make them into int directly for some reason
     df['temp'] = df['temp'].apply(lambda x: '{:0.1f}'.format(x)).astype(float)
     df['rh'] = df['rh'].apply(lambda x: '{:0.0f}'.format(x)).astype(float)
     df['ws'] = df['ws'].apply(lambda x: '{:0.1f}'.format(x)).astype(float)
     df['wd'] = df['wd'].apply(lambda x: '{:0.0f}'.format(x)).astype(float)
     df['prec'] = df['prec'].apply(lambda x: '{:0.1f}'.format(x)).astype(float)
+    # df['date'] = df['time'].to_period('d')
     result = {
         'location': [float(nc_temp.variables['latitude'][i_lat]), float(nc_temp.variables['longitude'][i_lon])],
-        'start': start.astimezone(pytz.timezone(zone)).strftime('%Y-%m-%d %H:%M %Z'),
+        'start': start.astimezone(pytz.timezone(zone)).strftime('%Y-%m-%d %H:%M:00 %Z'),
+        'end': end.astimezone(pytz.timezone(zone)).strftime('%Y-%m-%d %H:%M:00 %Z'),
         'hours': hours,
         'temp': list(df['temp'].values),
         'rh': [int(x) for x in df['rh'].values],
@@ -409,7 +431,7 @@ def getWeatherByPoint(i_lat, i_lon, model, zone, ensemble=None, start=datetime.d
         'wd': [int(x) for x in df['wd'].values],
         'prec': list(df['prec'].values),
     }
-    return json.dumps(result)
+    return result
 
 def getWeather(latitude, longitude, model, zone, N=1, ensemble=None, start=datetime.datetime.now(), hours=24, format='json'):
     if latitude < LATITUDE_MIN or latitude > LATITUDE_MAX:
@@ -431,11 +453,24 @@ def getWeather(latitude, longitude, model, zone, N=1, ensemble=None, start=datet
         p = points.iloc[i]
         i_lat = int(p.i_lat)
         i_lon = int(p.i_lon)
-        wx_stn = json.loads(getWeatherByPoint(i_lat, i_lon, model, zone, ensemble, start, hours, format))
+        wx_stn = getWeatherByPoint(i_lat, i_lon, model, zone, ensemble, start, hours, format)
         wx_stn['distance'] = p.distance
-        results.append(json.dumps(wx_stn))
-    return results
+        results.append(wx_stn)
+    return json.dumps(results)
 
-wx = getWeather(46, -85, 'ERA5', 'EST', N=5, start=datetime.datetime(2008, 5, 1, tzinfo=pytz.timezone('EST')), hours=1000)
-with open('out.json', 'w') as f:
-    json.dump(json.loads("[" + ",".join(wx) + "]"), f, indent=2)
+df = pd.read_csv('stations.csv', index_col='FID')
+out_dir = ensure_dir('wx')
+for stn in df.itertuples():
+    print(stn)
+    start = datetime.datetime(stn.minYR, 1, 1, tzinfo=pytz.timezone('GMT'))
+    end = datetime.datetime(stn.maxYr + 1, 1, 1, tzinfo=pytz.timezone('GMT'))
+    hours = (end - start).days * 24 - 1
+    # HACK: daylight savings or leap years are making a mess of things?
+    while((start + datetime.timedelta(hours=hours + 1)) <= end):
+        hours = hours + 1
+    # n = 1
+    n = 5 if stn.Analysis == 'Spot Check' else 500
+    # if stn.Analysis == 'Spot Check':
+    wx = getWeather(stn.latitude, stn.longitude, 'ERA5', 'GMT', N=n, start=start, hours=hours)
+    with open(os.path.join(out_dir, '{}.json'.format(stn.station)), 'w') as f:
+        json.dump(json.loads(wx), f, indent=2)
