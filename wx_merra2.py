@@ -10,7 +10,7 @@ from urllib3.exceptions import InsecureRequestWarning
 import os
 
 # DIR = './merra2'
-DIR = r'F:\wxreanalysis\merra2'
+DIR = r'G:\wxreanalysis\merra2'
 if not os.path.exists(DIR):
     os.makedirs(DIR)
 
