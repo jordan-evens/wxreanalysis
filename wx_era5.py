@@ -39,8 +39,8 @@ def ensure_dir(dir):
         os.makedirs(dir)
     return dir
 
-# DIR = ensure_dir('F:/wxreanalysis/era5')
-DIR = ensure_dir('era5')
+DIR = ensure_dir('G:/wxreanalysis/era5')
+# DIR = ensure_dir('era5')
 
 def calc_rh(Td, T):
     """!
@@ -380,33 +380,6 @@ def getWeatherByPoint(i_lat, i_lon, model, zone, ensemble=None, start=datetime.d
                            'wd': calc_wd(u, v),
                            # convert m to mm
                            'prec': prec * 1000})
-        # for i_time, time in enumerate(nc_temp.variables['time']):
-        #     date = to_datetime(int(time.data))
-        #     if (date >= start and date < end):
-        #         def get_var(nc, name):
-        #             v = nc.variables[name]
-        #             d = v[i_time, i_lat, i_lon]
-        #             # def fix(x):
-        #             #     return(np.NaN if x == v.missing_value else x)
-        #             # d = np.vectorize(fix)(d)
-        #             if d == v.missing_value:
-        #                 d = np.NaN
-        #             return d
-        #
-        #         temp = get_var(nc_temp, 't2m')
-        #         dew = get_var(nc_dew, 'd2m')
-        #         prec = get_var(nc_prec, 'tp')
-        #         u = get_var(nc_wind_u, 'u10')
-        #         v = get_var(nc_wind_v, 'v10')
-        #         df = pd.DataFrame({'temp': [kelvin_to_celcius(temp)],
-        #                            'rh': [calc_rh(kelvin_to_celcius(dew),
-        #                                           kelvin_to_celcius(temp))],
-        #                            'ws': [calc_ws(u, v)],
-        #                            'wd': [calc_wd(u, v)],
-        #                            # convert m to mm
-        #                            'prec': [prec * 1000]})
-        #         df['time'] = date
-        #         rows.append(df)
         rows.append(df)
     df = pd.concat(rows)
     df = df[df.time >= start]
@@ -458,19 +431,36 @@ def getWeather(latitude, longitude, model, zone, N=1, ensemble=None, start=datet
         results.append(wx_stn)
     return json.dumps(results)
 
-df = pd.read_csv('stations.csv', index_col='FID')
-out_dir = ensure_dir('wx')
-for stn in df.itertuples():
-    print(stn)
-    start = datetime.datetime(stn.minYR, 1, 1, tzinfo=pytz.timezone('GMT'))
-    end = datetime.datetime(stn.maxYr + 1, 1, 1, tzinfo=pytz.timezone('GMT'))
-    hours = (end - start).days * 24 - 1
-    # HACK: daylight savings or leap years are making a mess of things?
-    while((start + datetime.timedelta(hours=hours + 1)) <= end):
-        hours = hours + 1
-    # n = 1
-    n = 5 if stn.Analysis == 'Spot Check' else 500
-    # if stn.Analysis == 'Spot Check':
-    wx = getWeather(stn.latitude, stn.longitude, 'ERA5', 'GMT', N=n, start=start, hours=hours)
-    with open(os.path.join(out_dir, '{}.json'.format(stn.station)), 'w') as f:
-        json.dump(json.loads(wx), f, indent=2)
+def getWeatherByBounds(bounds, model, zone, ensemble=None, start=datetime.datetime.now(), hours=24, format='json'):
+    if start < DATE_MIN:
+        raise ValueError("Start date out of bounds")
+    if end > DATE_MAX:
+        raise ValueError("End date out of bounds")
+    if model != 'ERA5':
+        raise ValueError("Unsupported model")
+    if format != 'json':
+        raise NotImplementedError("Only json is supported")
+    if bounds is None:
+        raise ValueError("No bounds specified")
+    if bounds['lat_min'] is None:
+        raise ValueError("lat_min not specified")
+    if bounds['lat_max'] is None:
+        raise ValueError("lat_max not specified")
+    if bounds['lon_min'] is None:
+        raise ValueError("lon_min not specified")
+    if bounds['lon_max'] is None:
+        raise ValueError("lon_max not specified")
+    # select closest  point to requested lat/lon
+    points = findByDistance((bounds['lat_min'] + bounds['lat_max']) / 2.0,
+                            (bounds['lon_min'] + bounds['lon_max']) / 2.0)
+    results = []
+    for i in range(len(points)):
+        p = points.iloc[i]
+        if (bounds['lat_min'] <= p.latitude <= bounds['lat_max']
+                and bounds['lon_min'] <= p.longitude <= bounds['lon_max']):
+            i_lat = int(p.i_lat)
+            i_lon = int(p.i_lon)
+            wx_stn = getWeatherByPoint(i_lat, i_lon, model, zone, ensemble, start, hours, format)
+            wx_stn['distance'] = p.distance
+            results.append(wx_stn)
+    return json.dumps(results)
