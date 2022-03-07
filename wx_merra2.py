@@ -1,4 +1,4 @@
-
+import shutil
 import ssl
 from tqdm import tqdm
 
@@ -19,7 +19,22 @@ requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 import urllib3
 urllib3.disable_warnings(category=InsecureRequestWarning)
 
+import numpy as np
+import pandas as pd
+import pytz
+import json
+import datetime
 
+from util import *
+LATITUDE_MIN = 41
+LATITUDE_MAX = 84
+LONGITUDE_MIN = -141
+LONGITUDE_MAX = -52
+AREA = [LATITUDE_MAX, LONGITUDE_MIN, LATITUDE_MIN, LONGITUDE_MAX]
+# NOTE: need to get a client key as per https://cds.climate.copernicus.eu/api-how-to
+DATE_MIN = datetime.datetime(1980, 1, 1, tzinfo=pytz.timezone("GMT"))
+DATE_MAX = datetime.datetime(2021, 12, 31, 23, tzinfo=pytz.timezone("GMT"))
+MODEL = 'MERRA2'
 # # LATITUDE_MIN = 41
 # # LATITUDE_MAX = 84
 # # LONGITUDE_MIN = -141
@@ -220,7 +235,7 @@ def get_date(date):
     #  'V2M: 2-meter_northward_wind',
     #  'V50M: northward_wind_at_50_meters']
     # try:
-    download(url_main.format(year=year, month=month, day=day, version=version))
+    sfc = download(url_main.format(year=year, month=month, day=day, version=version))
     # except KeyboardInterrupt as e:
     #     raise e
     # except:
@@ -275,13 +290,262 @@ def get_date(date):
     #  'Z0H: surface_roughness_for_heat',
     #  'Z0M: surface_roughness']
     # try:
-    download(url_flux.format(year=year, month=month, day=day, version=version))
+    flux = download(url_flux.format(year=year, month=month, day=day, version=version))
     # except KeyboardInterrupt as e:
     #     raise e
     # except:
     #     pass
+    return {
+        'sfc': sfc,
+        'flux': flux
+    }
 
-d = datetime.date(1980, 1, 1)
-while (d < datetime.date.today()):
-    get_date(d)
-    d = d + datetime.timedelta(days=1)
+def q_to_rh(qair, temp, press = 1013.25):
+    es = 6.112 * math.exp((17.67 * temp)/(temp + 243.5))
+    e = qair * press / (0.378 * qair + 0.622)
+    rh = e / es
+    rh = (min(100, max(0, 100 * rh)))
+    return rh
+
+q_to_rh = np.vectorize(q_to_rh)
+
+def getPoints(year):
+    files = get_date(datetime.date(year, 1, 1))
+    nc_sfc = netCDF4.Dataset(files['sfc'])
+    # bounds would just be halfway to the next point in each direction?
+    latitudes = pd.DataFrame(data=nc_sfc.variables['lat'][:].data, columns=['latitude'])
+    latitudes['i_lat'] = latitudes.index
+    longitudes = pd.DataFrame(data=nc_sfc.variables['lon'][:].data, columns=['longitude'])
+    longitudes['i_lon'] = longitudes.index
+    latitudes['y_min'] = (latitudes['latitude'] + latitudes['latitude'].shift(-1)) / 2
+    latitudes['y_min'] = latitudes['y_min'].apply(lambda x: x if not np.isnan(x) else latitudes['latitude'].min())
+    latitudes['y_max'] = (latitudes['latitude'] + latitudes['latitude'].shift(1)) / 2
+    latitudes['y_max'] = latitudes['y_max'].apply(lambda x: x if not np.isnan(x) else latitudes['latitude'].max())
+    longitudes['x_min'] = (longitudes['longitude'] + longitudes['longitude'].shift(1)) / 2
+    longitudes['x_min'] = longitudes['x_min'].apply(lambda x: x if not np.isnan(x) else longitudes['longitude'].min())
+    longitudes['x_max'] = (longitudes['longitude'] + longitudes['longitude'].shift(-1)) / 2
+    longitudes['x_max'] = longitudes['x_max'].apply(lambda x: x if not np.isnan(x) else longitudes['longitude'].max())
+    points = latitudes.merge(longitudes, how='cross')
+    return points
+
+def getModels(latitude, longitude, start=datetime.datetime.now().astimezone(pytz.timezone("GMT")), format='json'):
+    result = {'models': [MODEL]}
+    if latitude < LATITUDE_MIN or latitude > LATITUDE_MAX:
+        result['models'] = []
+    if longitude < LONGITUDE_MIN or longitude > LONGITUDE_MAX:
+        result['models'] = []
+    if start < DATE_MIN or start > DATE_MAX:
+        result['models'] = []
+    if format != 'json':
+        raise NotImplementedError("Only json is supported")
+    return json.dumps(result)
+
+def findByDistance(latitude, longitude, year=DATE_MIN.year):
+    points = getPoints(year)
+    # FIX: this is wrong because the earth isn't flat
+    points['distance'] = points.apply(lambda x: math.sqrt(math.pow(x['latitude'] - latitude, 2) + math.pow(x['longitude'] - longitude, 2)), axis=1)
+    points = points.sort_values(['distance'])
+    return points
+
+def getBounds(latitude, longitude, model, format='json'):
+    if latitude < LATITUDE_MIN or latitude > LATITUDE_MAX:
+        pass
+    if longitude < LONGITUDE_MIN or longitude > LONGITUDE_MAX:
+        pass
+    # if start < DATE_MIN or start > DATE_MAX:
+    #     pass
+    if model != MODEL:
+        raise ValueError("Unsupported model")
+    if format != 'json':
+        raise NotImplementedError("Only json is supported")
+    points = findByDistance(latitude, longitude)
+    closest = points.iloc[0]
+    return json.dumps({
+        'center': [closest.latitude, closest.longitude],
+        'bounds': [closest.x_min, closest.y_min, closest.x_max, closest.x_min]
+    })
+
+def getStations(latitude, longitude, model, N=10, offset=0, format='json'):
+    if latitude < LATITUDE_MIN or latitude > LATITUDE_MAX:
+        raise ValueError("Location out of bounds")
+    if longitude < LONGITUDE_MIN or longitude > LONGITUDE_MAX:
+        raise ValueError("Location out of bounds")
+    if model != MODEL:
+        raise ValueError("Unsupported model")
+    if format != 'json':
+        raise NotImplementedError("Only json is supported")
+    points = findByDistance(latitude, longitude)
+    points = points.iloc[offset:N + offset]
+    result = {}
+    for p in points.itertuples():
+        result[p.Index] = {
+            'location': [p.latitude, p.longitude],
+            'distance': p.distance
+        }
+    return json.dumps(result)
+
+def getWeatherByPoint(i_lat, i_lon, model, zone, ensemble=None, start=datetime.datetime.now(), hours=24, format='json'):
+    start = start.astimezone(pytz.timezone(zone))
+    end = (start + datetime.timedelta(hours=hours))
+    if start < DATE_MIN:
+        raise ValueError("Start date out of bounds")
+    if end > DATE_MAX:
+        raise ValueError("End date out of bounds")
+    if model != MODEL:
+        raise ValueError("Unsupported model")
+    if format != 'json':
+        raise NotImplementedError("Only json is supported")
+    rows = []
+    d = start
+    rows = []
+    while (d < end):
+        files = get_date(d)
+        def do_it():
+            nc_sfc = None
+            nc_flux = None
+            is_deleted = False
+            try:
+                nc_sfc = netCDF4.Dataset(files['sfc'])
+            except OSError as e:
+                if "NetCDF:" not in str(e):
+                    raise e
+                print(e)
+                del nc_sfc
+                os.remove(files['sfc'])
+                is_deleted = True
+            try:
+                nc_flux = netCDF4.Dataset(files['flux'])
+            except OSError as e:
+                if "NetCDF:" not in str(e):
+                    raise e
+                print(e)
+                if not is_deleted:
+                    nc_sfc.close()
+                    del nc_sfc
+                del nc_flux
+                os.remove(files['flux'])
+                is_deleted = True
+            if is_deleted:
+                return None
+            for k in ['time', 'lat', 'lon']:
+                assert(all(nc_sfc.variables[k][:].data == nc_flux.variables[k][:].data))
+            def to_datetime(minutes):
+                return (datetime.datetime.strptime(str(nc_sfc.variables['time'].begin_date),
+                                                   '%Y%m%d').replace(tzinfo=pytz.timezone("GMT")) +
+                        datetime.timedelta(minutes=int(minutes))).astimezone(pytz.timezone("GMT"))
+            to_datetime = np.vectorize(to_datetime)
+            time = to_datetime(nc_sfc['time'][:])
+            temp = nc_sfc['T2M'][:, i_lat, i_lon]
+            qv = nc_sfc['QV2M'][:, i_lat, i_lon]
+            prec = nc_flux['PRECTOTCORR'][:, i_lat, i_lon]
+            u = nc_sfc['U10M'][:, i_lat, i_lon]
+            v = nc_sfc['V10M'][:, i_lat, i_lon]
+            df = pd.DataFrame({'time': time,
+                               'temp': kelvin_to_celcius(temp),
+                               'rh': q_to_rh(qv,
+                                             kelvin_to_celcius(temp)),
+                               'ws': calc_ws(u, v),
+                               'wd': calc_wd(u, v),
+                               # convert m to mm
+                               'prec': prec * 1000})
+            nc_sfc.close()
+            nc_flux.close()
+            del nc_sfc
+            del nc_flux
+            return df
+        df = do_it()
+        if df is None:
+            files = get_date(d)
+            df = do_it()
+        if df is None:
+            print("Missing data")
+        rows.append(df)
+        d = d + datetime.timedelta(days=1)
+    df = pd.concat(rows)
+    nc_sfc = netCDF4.Dataset(files['sfc'])
+    df = df[df.time >= start]
+    df = df[df.time < end]
+    df = df[['time', 'temp', 'rh', 'ws', 'wd', 'prec']]
+    # df['prec_sum'] = df.groupby(pd.to_datetime(df.time.to_numpy()).to_period('d')).prec.cumsum()
+    # HACK: can't make them into int directly for some reason
+    df['temp'] = df['temp'].apply(lambda x: '{:0.1f}'.format(x)).astype(float)
+    df['rh'] = df['rh'].apply(lambda x: '{:0.0f}'.format(x)).astype(float)
+    df['ws'] = df['ws'].apply(lambda x: '{:0.1f}'.format(x)).astype(float)
+    df['wd'] = df['wd'].apply(lambda x: '{:0.0f}'.format(x)).astype(float)
+    df['prec'] = df['prec'].apply(lambda x: '{:0.1f}'.format(x)).astype(float)
+    # df['date'] = df['time'].to_period('d')
+    result = {
+        'location': [float(nc_sfc.variables['lat'][i_lat]), float(nc_sfc.variables['lon'][i_lon])],
+        'start': start.astimezone(pytz.timezone(zone)).strftime('%Y-%m-%d %H:%M:00 %Z'),
+        'end': end.astimezone(pytz.timezone(zone)).strftime('%Y-%m-%d %H:%M:00 %Z'),
+        'hours': hours,
+        'temp': list(df['temp'].values),
+        'rh': [int(x) for x in df['rh'].values],
+        'ws': list(df['ws'].values),
+        'wd': [int(x) for x in df['wd'].values],
+        'prec': list(df['prec'].values),
+    }
+    return result
+
+
+def getWeather(latitude, longitude, model, zone, N=1, ensemble=None, start=datetime.datetime.now(), hours=24, format='json'):
+    if latitude < LATITUDE_MIN or latitude > LATITUDE_MAX:
+        raise ValueError("Location out of bounds")
+    if longitude < LONGITUDE_MIN or longitude > LONGITUDE_MAX:
+        raise ValueError("Location out of bounds")
+    start = start.astimezone(pytz.timezone(zone))
+    end = (start + datetime.timedelta(hours=hours))
+    if start < DATE_MIN:
+        raise ValueError("Start date out of bounds")
+    if end > DATE_MAX:
+        raise ValueError("End date out of bounds")
+    if model != MODEL:
+        raise ValueError("Unsupported model")
+    if format != 'json':
+        raise NotImplementedError("Only json is supported")
+    # select closest  point to requested lat/lon
+    points = findByDistance(latitude, longitude)
+    results = []
+    for i in range(0, N):
+        p = points.iloc[i]
+        i_lat = int(p.i_lat)
+        i_lon = int(p.i_lon)
+        wx_stn = getWeatherByPoint(i_lat, i_lon, model, zone, ensemble, start, hours, format)
+        wx_stn['distance'] = p.distance
+        results.append(wx_stn)
+    return json.dumps(results)
+
+def getWeatherByBounds(bounds, model, zone, ensemble=None, start=datetime.datetime.now(), hours=24, format='json'):
+    if start < DATE_MIN:
+        raise ValueError("Start date out of bounds")
+    end = start + datetime.timedelta(hours=hours)
+    if end > DATE_MAX:
+        raise ValueError("End date out of bounds")
+    if model != MODEL:
+        raise ValueError("Unsupported model")
+    if format != 'json':
+        raise NotImplementedError("Only json is supported")
+    if bounds is None:
+        raise ValueError("No bounds specified")
+    if bounds['lat_min'] is None:
+        raise ValueError("lat_min not specified")
+    if bounds['lat_max'] is None:
+        raise ValueError("lat_max not specified")
+    if bounds['lon_min'] is None:
+        raise ValueError("lon_min not specified")
+    if bounds['lon_max'] is None:
+        raise ValueError("lon_max not specified")
+    # select closest  point to requested lat/lon
+    points = findByDistance((bounds['lat_min'] + bounds['lat_max']) / 2.0,
+                            (bounds['lon_min'] + bounds['lon_max']) / 2.0)
+    results = []
+    for i in range(len(points)):
+        p = points.iloc[i]
+        if (bounds['lat_min'] <= p.latitude <= bounds['lat_max']
+                and bounds['lon_min'] <= p.longitude <= bounds['lon_max']):
+            i_lat = int(p.i_lat)
+            i_lon = int(p.i_lon)
+            wx_stn = getWeatherByPoint(i_lat, i_lon, model, zone, ensemble, start, hours, format)
+            wx_stn['distance'] = p.distance
+            results.append(wx_stn)
+    return json.dumps(results)

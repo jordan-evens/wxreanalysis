@@ -1,15 +1,5 @@
 #!/usr/bin/env python
 
-import ssl
-## So HTTPS transfers work properly
-ssl._create_default_https_context = ssl._create_unverified_context
-
-import requests
-from urllib3.exceptions import InsecureRequestWarning
-
-# Suppress only the single warning from urllib3 needed.
-requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
-
 import cdsapi
 import netCDF4
 import datetime
@@ -19,6 +9,11 @@ import numpy as np
 import math
 import json
 import pytz
+from util import calc_rh
+from util import calc_wd
+from util import calc_ws
+from util import ensure_dir
+from util import kelvin_to_celcius
 
 LATITUDE_MIN = 41
 LATITUDE_MAX = 84
@@ -28,64 +23,10 @@ AREA = [LATITUDE_MAX, LONGITUDE_MIN, LATITUDE_MIN, LONGITUDE_MAX]
 # NOTE: need to get a client key as per https://cds.climate.copernicus.eu/api-how-to
 DATE_MIN = datetime.datetime(1980, 1, 1, tzinfo=pytz.timezone("GMT"))
 DATE_MAX = datetime.datetime(2021, 12, 31, 23, tzinfo=pytz.timezone("GMT"))
-
-def ensure_dir(dir):
-    """!
-    Check if directory exists and make it if not
-    @param dir Directory to ensure existence of
-    @return None
-    """
-    if not os.path.exists(dir):
-        os.makedirs(dir)
-    return dir
+MODEL = 'ERA5'
 
 DIR = ensure_dir('G:/wxreanalysis/era5')
 # DIR = ensure_dir('era5')
-
-def calc_rh(Td, T):
-    """!
-    Calculate RH based on dewpoint temp and temp
-    @param Td Dewpoint temperature (Celcius)
-    @param T Temperature (Celcius)
-    @return Relative Humidity (%)
-    """
-    m = 7.591386
-    Tn = 240.7263
-    return 100 * pow(10, (m * ((Td / (Td + Tn)) - (T / (T + Tn)))))
-
-def calc_ws(u, v):
-    """!
-    Calculate wind speed in km/h from U and V wind given in m/s
-    @param u Wind vector in U direction (m/s)
-    @param v Wind vector in V direction (m/s)
-    @return Calculated wind speed (km/h)
-    """
-    # NOTE: convert m/s to km/h
-    return 3.6 * math.sqrt(u * u + v * v)
-
-
-def calc_wd(u, v):
-    """!
-    Calculate wind direction from U and V wind given in m/s
-    @param u Wind vector in U direction (m/s)
-    @param v Wind vector in V direction (m/s)
-    @return Wind direction (degrees)
-    """
-    return ((180 / math.pi * math.atan2(-u, -v)) + 360) % 360
-
-
-def kelvin_to_celcius(t):
-    """!
-    Convert temperature in Kelvin to Celcius
-    @param t Temperature (Celcius)
-    @return Temperature (Kelvin)
-    """
-    return t - 273.15
-
-calc_rh = np.vectorize(calc_rh)
-calc_ws = np.vectorize(calc_ws)
-calc_wd = np.vectorize(calc_wd)
-kelvin_to_celcius = np.vectorize(kelvin_to_celcius)
 
 c = cdsapi.Client(verify=False)
 
@@ -238,6 +179,7 @@ def get_year(year = 2008, convert=True):
             by_latitude.append(df)
         df = pd.concat(by_latitude)
         df['time'] = date
+        df['p'] = df['prec'] - df['prec'].shift(-1)
         #result.append(df)
         df = df[['time', 'latitude', 'longitude', 'temp', 'rh', 'ws', 'wd', 'prec']]
         df['temp'] = df['temp'].apply(lambda x: '{:0.1f}'.format(x))
@@ -272,7 +214,7 @@ def getPoints(year):
     return points
 
 def getModels(latitude, longitude, start=datetime.datetime.now(), format='json'):
-    result = {'models': ['ERA5']}
+    result = {'models': [MODEL]}
     if latitude < LATITUDE_MIN or latitude > LATITUDE_MAX:
         result['models'] = []
     if longitude < LONGITUDE_MIN or longitude > LONGITUDE_MAX:
@@ -299,8 +241,8 @@ def getBounds(latitude, longitude, model, format='json'):
         pass
     # if start < DATE_MIN or start > DATE_MAX:
     #     pass
-    if model != 'ERA5':
-        raise InvalidArgumentError("Unsupported model")
+    if model != MODEL:
+        raise ValueError("Unsupported model")
     if format != 'json':
         raise NotImplementedError("Only json is supported")
     points = findByDistance(latitude, longitude)
@@ -315,7 +257,7 @@ def getStations(latitude, longitude, model, N=10, offset=0, format='json'):
         raise ValueError("Location out of bounds")
     if longitude < LONGITUDE_MIN or longitude > LONGITUDE_MAX:
         raise ValueError("Location out of bounds")
-    if model != 'ERA5':
+    if model != MODEL:
         raise ValueError("Unsupported model")
     if format != 'json':
         raise NotImplementedError("Only json is supported")
@@ -325,7 +267,7 @@ def getStations(latitude, longitude, model, N=10, offset=0, format='json'):
     for p in points.itertuples():
         result[p.Index] = {
             'location': [p.latitude, p.longitude],
-            'distance': p.distancedf
+            'distance': p.distance
         }
     return json.dumps(result)
 
@@ -341,12 +283,13 @@ def getWeatherByPoint(i_lat, i_lon, model, zone, ensemble=None, start=datetime.d
         raise ValueError("Start date out of bounds")
     if end > DATE_MAX:
         raise ValueError("End date out of bounds")
-    if model != 'ERA5':
+    if model != MODEL:
         raise ValueError("Unsupported model")
     if format != 'json':
         raise NotImplementedError("Only json is supported")
     rows = []
-    for year in sorted(set(list(range(start.year, end.year)) + [end.year])):
+    # do it from day before start so that we can subtract precip
+    for year in sorted(set(list(range((start - datetime.timedelta(days=1)).year, end.year)) + [end.year])):
         file_temp = os.path.join(DIR, '{year:04d}_temp.nc'.format(year=year))
         file_dew = os.path.join(DIR, '{year:04d}_dew.nc'.format(year=year))
         file_wind_u = os.path.join(DIR, '{year:04d}_wind_u.nc'.format(year=year))
@@ -382,6 +325,9 @@ def getWeatherByPoint(i_lat, i_lon, model, zone, ensemble=None, start=datetime.d
                            'prec': prec * 1000})
         rows.append(df)
     df = pd.concat(rows)
+    # change precip to not be cumulative
+    df['p'] = df['prec'] - df['prec'].shift(1)
+    df['prec'] = df.apply(lambda x: x['p'] if x['time'].hour != 1 else x['prec'], axis=1)
     df = df[df.time >= start]
     df = df[df.time < end]
     df = df[['time', 'temp', 'rh', 'ws', 'wd', 'prec']]
@@ -413,9 +359,11 @@ def getWeather(latitude, longitude, model, zone, N=1, ensemble=None, start=datet
         raise ValueError("Location out of bounds")
     if start < DATE_MIN:
         raise ValueError("Start date out of bounds")
+    start = start.astimezone(pytz.timezone(zone))
+    end = (start + datetime.timedelta(hours=hours))
     if end > DATE_MAX:
         raise ValueError("End date out of bounds")
-    if model != 'ERA5':
+    if model != MODEL:
         raise ValueError("Unsupported model")
     if format != 'json':
         raise NotImplementedError("Only json is supported")
@@ -434,9 +382,10 @@ def getWeather(latitude, longitude, model, zone, N=1, ensemble=None, start=datet
 def getWeatherByBounds(bounds, model, zone, ensemble=None, start=datetime.datetime.now(), hours=24, format='json'):
     if start < DATE_MIN:
         raise ValueError("Start date out of bounds")
+    end = start + datetime.timedelta(hours=hours)
     if end > DATE_MAX:
         raise ValueError("End date out of bounds")
-    if model != 'ERA5':
+    if model != MODEL:
         raise ValueError("Unsupported model")
     if format != 'json':
         raise NotImplementedError("Only json is supported")
