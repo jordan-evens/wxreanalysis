@@ -446,8 +446,8 @@ def getWeatherByPoint(i_lat, i_lon, model, zone, ensemble=None, start=datetime.d
                                              kelvin_to_celcius(temp)),
                                'ws': calc_ws(u, v),
                                'wd': calc_wd(u, v),
-                               # convert m to mm
-                               'prec': prec * 1000})
+                               # convert kg/m^2/s to mm
+                               'prec': prec * 60 * 60})
             nc_sfc.close()
             nc_flux.close()
             del nc_sfc
