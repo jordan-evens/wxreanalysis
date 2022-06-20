@@ -23,10 +23,10 @@ AREA = [LATITUDE_MAX, LONGITUDE_MIN, LATITUDE_MIN, LONGITUDE_MAX]
 # NOTE: need to get a client key as per https://cds.climate.copernicus.eu/api-how-to
 DATE_MIN = datetime.datetime(1980, 1, 1, tzinfo=pytz.timezone("GMT"))
 DATE_MAX = datetime.datetime(2021, 12, 31, 23, tzinfo=pytz.timezone("GMT"))
-MODEL = 'ERA5'
+MODEL = 'ERA5-LAND'
 
-DIR = ensure_dir('G:/wxreanalysis/era5')
-# DIR = ensure_dir('era5')
+DIR = ensure_dir('G:/wxreanalysis/era5land')
+# DIR = ensure_dir('era5land')
 
 c = cdsapi.Client(verify=False)
 

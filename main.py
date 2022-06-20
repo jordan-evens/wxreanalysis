@@ -7,8 +7,8 @@ import pandas as pd
 import json
 import pytz
 
-# import wx_era5 as wx_model
-import wx_merra2 as wx_model
+import wx_era5land as wx_model
+# import wx_merra2 as wx_model
 
 df = pd.read_csv('stations.csv', index_col='FID')
 out_dir = util.ensure_dir('wx/{}'.format(wx_model.MODEL))
