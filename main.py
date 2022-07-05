@@ -7,11 +7,14 @@ import pandas as pd
 import json
 import pytz
 
+# import wx_era5 as wx_model
 import wx_era5land as wx_model
 # import wx_merra2 as wx_model
 
 df = pd.read_csv('stations.csv', index_col='FID')
 out_dir = util.ensure_dir('wx/{}'.format(wx_model.MODEL))
+# df = pd.read_csv('ab_ws_selection_final.csv')
+# out_dir = util.ensure_dir('wx_AB/{}'.format(wx_model.MODEL))
 if not os.path.exists(out_dir):
     os.makedirs(out_dir)
 
