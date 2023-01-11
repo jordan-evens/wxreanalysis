@@ -3,8 +3,6 @@ library(data.table)
 library(lubridate)
 library(cffdrs)
 
-DIRS <- c('wx', 'wx_AB')
-
 MODELS = c('ERA5', 'ERA5-LAND', 'MERRA2')
 
 readJSON <- function(filename)
@@ -77,51 +75,61 @@ calc_fwi <- function(wx) {
   return(wx_fwi[, ..COLS_ALL])
 }
 
+calc_all <- function(dir_in, wx) {
+  wx_fwi_all <- NULL
+  wx_orig_all <- NULL
+  wx_recalc_all <- NULL
+  for (i in 1:length(MODELS)) {
+    model <- MODELS[i]
+    DIR <- paste0(dir_in, '/', model, '/')
+    for (stn in names(stns)) {
+      print(stn)
+      wx_model <- stns[[stn]]
+      wx_model[, `:=`(temp = as.double(temp), rh = as.double(rh), ws = as.double(ws), wd=as.integer(wd), prec=as.double(prec), latitude=as.double(latitude), longitude=as.double(longitude))]
+      wx_stn <- wx_on[ID == stn]
+      for (yr in unique(year(wx_model$time))) {
+        print(yr)
+        wx_model_yr <- wx_model[year(time) == yr]
+        wx_stn_yr <- wx_stn[year(DATE) == yr]
+        wx_model_yr[, for_date := as_date(ifelse(hour(time) > 11, as_date(time) + days(1), as_date(time)))]
+        wx_model_yr[, prec := as.double(prec)]
+        wx_model_yr[, prec24 := sum(prec), by=list(for_date)]
+        wx_model_yr_1200 <- wx_model_yr[hour(time) == 12]
+        wx_model_yr_1200[, prec := prec24]
+        wx_model_yr_1200 <- wx_model_yr_1200[, -c('for_date', 'prec24')]
+        wx_model_yr_1200[, DATE := date(time)]
+        # NOTE: startup is values after calculating using actual startup indices, so you'd need to work backwards to find real startup indices
+        startup <- wx_stn_yr[min(DATE) == DATE][1]
+        shutdown <- wx_stn_yr[max(DATE) == DATE][1]
+        wx <- wx_model_yr_1200[DATE >=  startup$DATE & DATE <= shutdown$DATE]
+        wx$stn <- stn
+        wx <- wx[, c('stn', 'latitude', 'longitude', 'DATE', 'temp', 'rh', 'ws', 'wd', 'prec')]
+        names(wx) <- COLS_WX
+        # wx_fwi <- cffdrs::fwi(input=wx, init=c(ffmc=startup$FFMC, dmc=startup$DMC, dc=startup$DC))
+        # HACK: assume default startup indices for now since startup is wrong anyway
+        pts <- unique(wx[, c('LAT', 'LONG')])
+        for (j in 1:nrow(pts)) {
+          pt <- pts[j,]
+          wx_fwi <- calc_fwi(wx[LAT == pt$LAT & LONG == pt$LONG])
+          wx_fwi$ID <- paste0(stn, '_', j)
+          wx_fwi$MODEL <- model
+          wx_fwi <- wx_fwi[, ..c(list('MODEL'), COLS_ALL)]
+          wx_fwi_all <- rbind(wx_fwi_all, wx_fwi)
+        }
+        if (1 == i) {
+          wx_orig_all <- rbind(wx_orig_all, wx_stn_yr)
+          wx_recalc <- calc_fwi(wx_stn_yr[, ..COLS_WX])
+          wx_recalc_all <- rbind(wx_recalc_all, wx_recalc)
+        }
+      }
+    }
+  }
+  return(list(wx_fwi_all, wx_orig_all, wx_recalc_all))
+}
+
+
 wx_ab <- get_AB()
 wx_on <- get_ON()
 
-wx_fwi_all <- NULL
-wx_orig_all <- NULL
-wx_recalc_all <- NULL
-dir_in <- DIRS[1]
-for (model in MODELS) {
-  DIR <- paste0(dir_in, '/', model, '/')
-  for (stn in names(stns)) {
-    print(stn)
-    wx_model <- stns[[stn]]
-    wx_model[, `:=`(temp = as.double(temp), rh = as.double(rh), ws = as.double(ws), wd=as.integer(wd), prec=as.double(prec), latitude=as.double(latitude), longitude=as.double(longitude))]
-    wx_stn <- wx_on[ID == stn]
-    for (yr in unique(year(wx_model$time))) {
-      print(yr)
-      wx_model_yr <- wx_model[year(time) == yr]
-      wx_stn_yr <- wx_stn[year(DATE) == yr]
-      wx_model_yr[, for_date := as_date(ifelse(hour(time) > 11, as_date(time) + days(1), as_date(time)))]
-      wx_model_yr[, prec := as.double(prec)]
-      wx_model_yr[, prec24 := sum(prec), by=list(for_date)]
-      wx_model_yr_1200 <- wx_model_yr[hour(time) == 12]
-      wx_model_yr_1200[, prec := prec24]
-      wx_model_yr_1200 <- wx_model_yr_1200[, -c('for_date', 'prec24')]
-      wx_model_yr_1200[, DATE := date(time)]
-      # NOTE: startup is values after calculating using actual startup indices, so you'd need to work backwards to find real startup indices
-      startup <- wx_stn_yr[min(DATE) == DATE][1]
-      shutdown <- wx_stn_yr[max(DATE) == DATE][1]
-      wx <- wx_model_yr_1200[DATE >=  startup$DATE & DATE <= shutdown$DATE]
-      wx$stn <- stn
-      wx <- wx[, c('stn', 'latitude', 'longitude', 'DATE', 'temp', 'rh', 'ws', 'wd', 'prec')]
-      names(wx) <- COLS_WX
-      # wx_fwi <- cffdrs::fwi(input=wx, init=c(ffmc=startup$FFMC, dmc=startup$DMC, dc=startup$DC))
-      # HACK: assume default startup indices for now since startup is wrong anyway
-      pts <- unique(wx[, c('LAT', 'LONG')])
-      for (i in 1:nrow(pts)) {
-        pt <- pts[i,]
-        wx_fwi <- calc_fwi(wx[LAT == pt$LAT & LONG == pt$LONG])
-        wx_fwi$ID <- paste0(stn, '_', i)
-        wx_fwi$MODEL <- model
-        wx_fwi_all <- rbind(wx_fwi_all, wx_fwi)
-      }
-      wx_orig_all <- rbind(wx_orig_all, wx_stn_yr)
-      wx_recalc <- calc_fwi(wx_stn_yr[, ..COLS_WX])
-      wx_recalc_all <- rbind(wx_recalc_all, wx_recalc)
-    }
-  }
-}
+wx_fwi_on <- calc_all('wx', wx_on)
+
