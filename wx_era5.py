@@ -179,7 +179,7 @@ def get_year(year = 2008, convert=True):
             by_latitude.append(df)
         df = pd.concat(by_latitude)
         df['time'] = date
-        df['p'] = df['prec'] - df['prec'].shift(-1)
+        # df['p'] = df['prec'] - df['prec'].shift(-1)
         #result.append(df)
         df = df[['time', 'latitude', 'longitude', 'temp', 'rh', 'ws', 'wd', 'prec']]
         df['temp'] = df['temp'].apply(lambda x: '{:0.1f}'.format(x))
@@ -325,9 +325,9 @@ def getWeatherByPoint(i_lat, i_lon, model, zone, ensemble=None, start=datetime.d
                            'prec': prec * 1000})
         rows.append(df)
     df = pd.concat(rows)
-    # change precip to not be cumulative
-    df['p'] = df['prec'] - df['prec'].shift(1)
-    df['prec'] = df.apply(lambda x: x['p'] if x['time'].hour != 1 else x['prec'], axis=1)
+    # # change precip to not be cumulative
+    # df['p'] = df['prec'] - df['prec'].shift(1)
+    # df['prec'] = df.apply(lambda x: x['p'] if x['time'].hour != 1 else x['prec'], axis=1)
     df = df[df.time >= start]
     df = df[df.time < end]
     df = df[['time', 'temp', 'rh', 'ws', 'wd', 'prec']]
