@@ -29,33 +29,36 @@ readJSON <- function(filename)
   return(result)
 }
 
-stns <- list()
-# for (s in list.files(DIR))
-# {
-#   stn <- substr(s, 1, 3)
-#   df <- readJSON(paste0(DIR, s))
-#   stns[[stn]] <- df
-# }
-
-stations <- as.data.table(read.csv('stations.csv'))
-
-
-for (i in 1:nrow(stations))
-{
-  r <- stations[i]
-  if ('Spot Check' == r$Analysis)
-  {
-    df <- readJSON(paste0(DIR, r$station, '.json'))
-    stns[[r$station]] <- df
+read_province <- function(dir_in, stations_csv) {
+  result <- list()
+  stations <- data.table::fread(stations_csv)
+  
+  for (model in MODELS) {
+    print(model)
+    stns <- list()
+    for (i in 1:nrow(stations)) {
+      r <- stations[i]
+      if ('Spot Check' == r$Analysis) {
+        print(r$station)
+        df <- readJSON(paste0(dir_in, '/', model, '/', r$station, '.json'))
+        stns[[r$station]] <- df
+      }
+    }
+    result[[model]] <- stns
   }
+  return(result)
 }
 
 COLS_WX <- c('ID', 'LAT', 'LONG', 'DATE', 'TEMP', 'RH', 'WS', 'WD', 'PREC')
 COLS_FWI <- c('FFMC', 'DMC', 'DC', 'ISI', 'BUI', 'FWI', 'DSR')
 COLS_ALL <- c(COLS_WX, COLS_FWI)
 
-get_AB <- function(filename='C:/nrcan/data/AB_AAF_2000-2017_wxObs.csv') {
+get_AB <- function(filename='C:/nrcan/data/abwx-new.csv') {
   wx_ab <- data.table::fread(filename)
+  wx_ab[, DATE := date(WEATHER_DATE)]
+  wx_ab <- wx_ab[, c('STATION_ID', 'LATITUDE', 'LONGITUDE', 'DATE', 'DRY_BULB_TEMPERATURE', 'RELATIVE_HUMIDITY', 'WIND_SPEED_KMH', 'WIND_DIRECTION', 'PRECIPITATION', 'FINE_FUEL_MOISTURE_CODE', 'DUFF_MOISTURE_CODE', 'DROUGHT_CODE', 'BUILD_UP_INDEX', 'INITIAL_SPREAD_INDEX', 'FIRE_WEATHER_INDEX', 'DAILY_SEVERITY_RATING')]
+  names(wx_ab) <- COLS_ALL
+  wx_ab <- wx_ab[!(is.na(FFMC) | is.na(DMC) | is.na(DC))]
   return(wx_ab)
 }
 
@@ -75,18 +78,19 @@ calc_fwi <- function(wx) {
   return(wx_fwi[, ..COLS_ALL])
 }
 
-calc_all <- function(dir_in, wx) {
+calc_all <- function(wx_prov, wx_models) {
   wx_fwi_all <- NULL
   wx_orig_all <- NULL
   wx_recalc_all <- NULL
   for (i in 1:length(MODELS)) {
     model <- MODELS[i]
-    DIR <- paste0(dir_in, '/', model, '/')
+    stns <- wx_models[[model]]
     for (stn in names(stns)) {
       print(stn)
+      stopifnot(stn %in% wx_prov$ID)
       wx_model <- stns[[stn]]
       wx_model[, `:=`(temp = as.double(temp), rh = as.double(rh), ws = as.double(ws), wd=as.integer(wd), prec=as.double(prec), latitude=as.double(latitude), longitude=as.double(longitude))]
-      wx_stn <- wx_on[ID == stn]
+      wx_stn <- wx_prov[ID == stn]
       for (yr in unique(year(wx_model$time))) {
         print(yr)
         wx_model_yr <- wx_model[year(time) == yr]
@@ -113,7 +117,8 @@ calc_all <- function(dir_in, wx) {
           wx_fwi <- calc_fwi(wx[LAT == pt$LAT & LONG == pt$LONG])
           wx_fwi$ID <- paste0(stn, '_', j)
           wx_fwi$MODEL <- model
-          wx_fwi <- wx_fwi[, ..c(list('MODEL'), COLS_ALL)]
+          cols <- wx_fwi <- cffdrs::fwi(input=wx, init=c(ffmc=startup$FFMC, dmc=startup$DMC, dc=startup$DC))
+          wx_fwi <- wx_fwi[, ..cols]
           wx_fwi_all <- rbind(wx_fwi_all, wx_fwi)
         }
         if (1 == i) {
@@ -124,12 +129,15 @@ calc_all <- function(dir_in, wx) {
       }
     }
   }
-  return(list(wx_fwi_all, wx_orig_all, wx_recalc_all))
+  return(list(models=wx_fwi_all, orig=wx_orig_all, recalc=wx_recalc_all))
 }
 
 
 wx_ab <- get_AB()
-wx_on <- get_ON()
+models_ab <- read_province('wx_AB', 'ab_ws_selection_final.csv')
+wx_fwi_ab <- calc_all(wx_ab, models_ab)
 
-wx_fwi_on <- calc_all('wx', wx_on)
+wx_on <- get_ON()
+models_on <- read_province('wx', 'stations.csv')
+wx_fwi_on <- calc_all(wx_on, models_on)
 
